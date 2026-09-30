@@ -19,10 +19,12 @@ Power AI Guide 是一个面向电力行业的智能问答助手。系统利用�
 ## 系统架构
 
 - **后端**：Spring Boot + Spring AI，提供 RESTful API 与 SSE 流式接口。
-- **数据库**：PostgreSQL + pgvector，向量维度 1024，距离类型 COSINE。
+- **数据库**：PostgreSQL + pgvector（向量维度 1024，距离类型 COSINE）+ pg_trgm（稀疏词面检索）。
+- **检索管线**：层级切块 → 稀疏-稠密混合召回 → 交叉编码器 Rerank 重排序 → LLM 生成。
 - **缓存与异步**：Redis / Redisson Stream，文档向量化等耗时任务异步处理。
 - **对象存储**：S3 兼容存储（本地开发用 RustFS，完整部署用 MinIO）。
 - **前端**：React + TypeScript + Vite + Tailwind CSS，提供知识库管理与问答界面。
+- **监控**：Spring Boot Actuator 暴露 health / info / metrics / Prometheus 端点。
 
 ## 技术栈
 
@@ -60,19 +62,26 @@ Power AI Guide 是一个面向电力行业的智能问答助手。系统利用�
 ### 知识库管理模块
 
 - **文档智能处理**：支持 PDF、DOCX、Markdown 等多种格式文档的自动上传、分块与异步向量化。
+- **层级切块**：基于标题树解析 + 自适应语义切块 + 章节路径标注，提升长文档切块与召回质量。
+- **批量上传**：支持一次上传多个文件，逐文件返回成功/失败结果，分类与文档类型整批共享。
+- **文档类型管理**：支持文档类型的增删改查，知识库可关联文档类型，问答时可按类型过滤检索范围。
 - **知识库运维**：支持分类管理、下载、删除、重新向量化、搜索和统计信息展示。
 - **异步处理流**：基于 Redis Stream 实现文档向量化，支持实时查看处理进度与失败重试。
 
 ### RAG 智能问答模块
 
+- **稀疏-稠密混合召回**：结合 pg_trgm 词面匹配（稀疏路）与 pgvector 向量检索（稠密路），按 `S = α·S_sparse + (1-α)·S_dense` 加权融合，兼顾关键词与语义两类查询的召回。
+- **交叉编码器重排序**：召回 Top-50 后经 Rerank 模型精排到 Top-5，提升回答的相关性。
 - **检索增强生成**：集成 pgvector，通过查询改写、相似度阈值和 TopK 策略提升回答的准确性与专业度。
+- **来源标注**：回答下方标注命中的文档名、章节路径、原文片段与相关度分数。
 - **流式响应交互**：基于 SSE（Server-Sent Events）技术实现打字机式流式响应。
-- **智能问答对话**：支持会话管理、置顶、多知识库关联、Markdown 展示和虚拟列表渲染。
+- **智能问答对话**：支持会话管理、置顶、多知识库/文档类型关联、Markdown 展示和虚拟列表渲染。
 
 ### 多模型与系统设置模块
 
 - **多 Provider 管理**：内置 DashScope、LM Studio、Kimi、DeepSeek、GLM 等 OpenAI 兼容 Provider 配置。
-- **默认模型切换**：支持在设置页切换默认聊天模型，不需要频繁修改源码配置。
+- **三类默认模型独立切换**：聊天、Embedding（向量化）、Rerank（重排序）三类模型的默认 Provider 可分别在设置页切换。
+- **Rerank 独立配置**：每个 Provider 可配置排序模型、端点与请求风格（OpenAI 兼容 / DashScope 原生）。
 - **配置安全落盘**：运行时配置默认写入用户目录 `~/.power-ai-guide/`，支持 API Key 加密配置。
 
 ## 项目结构
@@ -87,16 +96,25 @@ power-ai-guide/
 │   │   │   ├── annotation/           # @RateLimit 可重复限流注解
 │   │   │   ├── aspect/               # RateLimitAspect + Redis Lua 限流
 │   │   │   ├── async/                # Redis Stream 生产者/消费者模板
+│   │   │   ├── chunking/             # 层级切块（标题树解析 + 自适应语义切块）
 │   │   │   ├── config/               # CORS、S3、OpenAPI、Jackson 等配置
+│   │   │   ├── constant/             # 常量
 │   │   │   ├── exception/            # 业务异常与全局异常处理
-│   │   │   └── result/               # 统一响应 Result<T>
+│   │   │   ├── json/                 # JSON 序列化支持
+│   │   │   ├── model/                # 通用模型（异步任务状态等）
+│   │   │   ├── result/               # 统一响应 Result<T>
+│   │   │   └── transaction/          # 事务执行器
 │   │   ├── infrastructure/           # 基础设施
 │   │   │   ├── file/                 # 文件解析、校验、清洗、S3 存储
 │   │   │   ├── mapper/               # MapStruct 映射器
 │   │   │   └── redis/                # RedisService
 │   │   └── modules/                  # 业务模块
-│   │       ├── knowledgebase/        # 知识库模块（管理 + RAG 问答）
-│   │       └── llmprovider/          # 多模型 Provider 配置
+│   │       ├── knowledgebase/        # 知识库模块（管理 + RAG 问答 + 文档类型）
+│   │       │   ├── listener/         # Redis Stream 向量化生产/消费
+│   │       │   ├── model/            # Entity / DTO / Request
+│   │       │   ├── repository/       # JPA Repository
+│   │       │   └── service/          # 业务编排
+│   │       └── llmprovider/          # 多模型 Provider 配置（controller/dto/model/repository/service）
 │   └── src/main/resources/
 │       ├── application.yml           # 应用配置
 │       ├── prompts/                  # AI 提示词模板（StringTemplate）
@@ -105,10 +123,11 @@ power-ai-guide/
 │
 ├── frontend/                         # 前端应用
 │   ├── src/
-│   │   ├── api/                      # API 接口
+│   │   ├── api/                      # API 接口（documentType / knowledgebase / ragChat / llmProvider）
 │   │   ├── components/               # 公共组件
+│   │   ├── constants/                # 路由等常量
 │   │   ├── hooks/                    # 业务 Hooks
-│   │   ├── pages/                    # 页面组件
+│   │   ├── pages/                    # 页面组件（知识库管理/上传/问答、文档类型管理、设置）
 │   │   ├── types/                    # 类型定义
 │   │   └── utils/                    # 工具函数
 │   ├── package.json
@@ -250,6 +269,16 @@ docker compose -f docker-compose.dev.yml up -d --force-recreate postgres redis
 ### Q: 设置页新增/切换模型后不生效？
 
 运行时 Provider 配置默认写到 `~/.power-ai-guide/llm-providers.yml` 和 `~/.power-ai-guide/llm-providers.env`。可以在设置页点击测试连接，或调用 `/api/llm-provider/reload` 重新加载配置。Docker 部署时如果希望配置持久化，建议为该目录挂载卷。
+
+### Q: 如何调整混合检索、重排序或层级切块？
+
+RAG 检索管线（层级切块 → 稀疏-稠密混合召回 → Rerank 重排序）默认已启用，配置集中在 `application.yml` 的 `app.ai.rag.*` 下，均可通过环境变量覆盖：
+
+- `APP_AI_RAG_HYBRID_ALPHA`（默认 `0.3`）：混合召回中稀疏分数的权重，`APP_AI_RAG_HYBRID_RECALL_TOPK`（默认 `50`）为召回候选数。
+- `APP_AI_RAG_RERANK_ENABLED` / `APP_AI_RAG_RERANK_TOPN`：是否启用重排序及精排条数（默认 Top-5）。
+- `APP_AI_RAG_CHUNKING_*`：层级切块的块大小、重叠比例等参数。
+
+重排序依赖默认 Rerank Provider（`app.ai.default-rerank-provider`）配置了 `supports-rerank=true` 与可用的 `rerank-model`，可在设置页切换。
 
 ### Q: Windows PowerShell 下后端日志中文乱码？
 
