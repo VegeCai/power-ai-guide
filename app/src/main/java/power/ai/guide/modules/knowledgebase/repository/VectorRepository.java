@@ -155,4 +155,23 @@ public class VectorRepository {
             throw new BusinessException(ErrorCode.KNOWLEDGE_BASE_QUERY_FAILED, "稀疏检索失败");
         }
     }
+
+    /**
+     * 导出指定知识库的全部分块正文（供 ragas 测试集生成使用）。
+     * metadata 为 JSON 类型，使用 -&gt;&gt; 取文本值。
+     *
+     * @param knowledgeBaseId 知识库ID
+     * @return 每行含 content / section_path / heading
+     */
+    public List<Map<String, Object>> listByKnowledgeBaseId(Long knowledgeBaseId) {
+        String sql = """
+            SELECT content,
+                   metadata->>'section_path' AS section_path,
+                   metadata->>'heading' AS heading
+            FROM vector_store
+            WHERE metadata->>'kb_id' = ?
+            ORDER BY metadata->>'chunk_index'
+            """;
+        return jdbcTemplate.queryForList(sql, knowledgeBaseId.toString());
+    }
 }

@@ -5,6 +5,7 @@ import power.ai.guide.common.chunking.HierarchicalChunker;
 import power.ai.guide.common.exception.BusinessException;
 import power.ai.guide.common.exception.ErrorCode;
 import power.ai.guide.common.transaction.TransactionalExecutor;
+import power.ai.guide.modules.knowledgebase.model.KnowledgeBaseChunkDTO;
 import power.ai.guide.modules.knowledgebase.repository.VectorRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -394,5 +395,17 @@ public class KnowledgeBaseVectorService {
             return;
         }
         transactionalExecutor.run(action);
+    }
+
+    /**
+     * 导出指定知识库的全部分块（正文 + 章节路径 + 标题），供 ragas 测试集生成使用。
+     */
+    public List<KnowledgeBaseChunkDTO> listChunks(Long knowledgeBaseId) {
+        return vectorRepository.listByKnowledgeBaseId(knowledgeBaseId).stream()
+            .map(row -> new KnowledgeBaseChunkDTO(
+                (String) row.get("content"),
+                (String) row.get("section_path"),
+                (String) row.get("heading")))
+            .toList();
     }
 }
